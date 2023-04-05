@@ -1,0 +1,291 @@
+<html>
+
+<body>
+
+	<div id="divUi">
+		<h3>PDF File Format Explorer</h3>
+		<p>Upload a valid PDF file to view its structure as JSON.</p>
+		<input type="file" onchange="UiEventHandler.inputFile_Changed(this)" />
+		<br />
+		<div>
+			<label>PDF File Structure as JSON:</label>
+			<br />
+			<textarea id="textareaPdfFileAsJson" cols="80" rows="16"></textarea>
+		</div>
+	</div>
+
+<script type="text/javascript">
+
+class ByteStreamFromBinaryString
+{
+	constructor(binaryString)
+	{
+		this.binaryString = binaryString;
+
+		this.byteOffset = 0;
+	}
+
+	hasMoreBytes()
+	{
+		return (this.byteOffset < this.binaryString.length);
+	}
+
+	readChar()
+	{
+		var charRead = this.binaryString[this.byteOffset];
+		this.byteOffset++;
+		return charRead;
+	}
+
+	readLine()
+	{
+		var lineSoFar = "";
+
+		var charRead = "";
+		while (charRead != "\n")
+		{
+			lineSoFar += charRead;
+			charRead = this.readChar();
+		}
+
+		return lineSoFar;
+	}
+}
+
+class PdfFile
+{
+	// For info on the PDF file specification, visit the following URL:
+	// https://resources.infosecinstitute.com/topic/pdf-file-format-basic-structure/
+
+	constructor(version, objects, crossReferences)
+	{
+		this.version = version;
+		this.objects = objects;
+		this.crossReferences = crossReferences;
+	}
+
+	static fromBinaryString(fileAsBinaryString)
+	{
+		var reader = new ByteStreamFromBinaryString(fileAsBinaryString);
+
+		var version = reader.readLine();
+		if (version != "%PDF-1.7")
+		{
+			throw new Error("Unsupported PDF file version: " + version);
+		}
+
+		var blankLine = reader.readLine();
+		if (blankLine != "")
+		{
+			throw new Error("Unexpected format: No blank line after version.");
+		}
+
+		var objectsReadSoFar = [];
+		var crossReferencesReadSoFar = [];
+
+		while (reader.hasMoreBytes())
+		{
+			var lineRead = reader.readLine();
+
+			if (lineRead == "%%EOF")
+			{
+				break;
+			}
+			else if (lineRead == "startxref")
+			{
+				lineRead = reader.readLine();
+				while (isNaN(lineRead) == false)
+				{
+					lineRead = reader.readLine();
+				}
+			}
+			else if (lineRead == "trailer")
+			{
+				var openAngleBrackets = reader.readLine();
+				if (openAngleBrackets != "<<")
+				{
+					throw new Error
+					(
+						"Unexpected format: Line after trailer expected to be '<<', but was: "
+						+ openAngleBrackets
+					);
+				}
+				else
+				{
+					lineRead = reader.readLine();
+					while (lineRead.startsWith("/"))
+					{
+						lineRead = reader.readLine();
+					}
+
+					var closeAngleBrackets = lineRead;
+					if (closeAngleBrackets != ">>")
+					{
+						throw new Error
+						(
+							"Unexpected format: Line at end of trailer expected to be '>>', but was: "
+							+ closeAngleBrackets
+						);
+					}
+				}
+			}
+			else if (lineRead == "xref")
+			{
+				var lineEndingWithReferenceCount = reader.readLine();
+				var unknownFieldAndReferenceCountAsStrings =
+					lineEndingWithReferenceCount.split(" ");
+				if (unknownFieldAndReferenceCountAsStrings.length != 2)
+				{
+					throw new Error
+					(
+						"Unexpected format: Expected 2 fields after xref line, but was: "
+						+ lineEndingWithReferenceCount
+					);
+				}
+				var referenceCountAsString =
+					unknownFieldAndReferenceCountAsStrings[1];
+				var referenceCount = parseInt(referenceCountAsString);
+				if (isNaN(referenceCount))
+				{
+					throw new Error
+					(
+						"Unexpected format: Reference count could not be parsed as integer: "
+						+ referenceCount
+					);
+				}
+				else
+				{
+					for (var i = 0; i < referenceCount; i++)
+					{
+						var crossReferenceAsString = reader.readLine();
+						var crossReference =
+							PdfFileCrossReference.fromString(crossReferenceAsString);
+						crossReferencesReadSoFar.push(crossReference);
+					}
+				}
+			}
+			else if (lineRead.endsWith("obj") )
+			{
+				var objectRead = 
+					PdfFileObject.fromHeaderLineAndReader(lineRead, reader);
+				objectsReadSoFar.push(objectRead);
+			}
+			else
+			{
+				throw new Error("Unexpected line: " + lineRead);
+			}
+		}
+
+		var returnValue = new PdfFile
+		(
+			version, objectsReadSoFar, crossReferencesReadSoFar
+		);
+
+		return returnValue;
+	}
+
+	toJson()
+	{
+		return JSON.stringify(this, 0, 4);
+	}
+}
+
+class PdfFileCrossReference
+{
+	constructor(todo)
+	{
+		this.todo = todo;
+	}
+
+	static fromString(stringToParse)
+	{
+		return new PdfFileCrossReference(stringToParse);
+	}
+}
+
+class PdfFileObject
+{
+	constructor(id, todo, content)
+	{
+		this.id = id;
+		this.todo = todo;
+		this.content = content;
+	}
+
+	static fromHeaderLineAndReader(objectHeaderLine, reader)
+	{
+		var objectRead;
+
+		var objectHeaderFields = objectHeaderLine.split(" ");
+		if (objectHeaderFields.length != 3)
+		{
+			throw new Error(
+				"Unexpected format: Object header had wrong number of fields: "
+				+ objectHeaderLine
+			);
+		}
+		else
+		{
+			var objectId = objectHeaderFields[0];
+			var unknownField = objectHeaderFields[1];
+			var textObj = objectHeaderFields[2];
+			if (textObj != "obj")
+			{
+				throw new Error(
+					"Unexpected format: Object header line expected to end with 'obj', but was: " + textObj
+				);
+			}
+
+			var lineRead = reader.readLine();
+
+			var linesInObject = [];
+
+			while (lineRead != "endobj")
+			{
+				linesInObject.push(lineRead);
+				lineRead = reader.readLine();
+			}
+
+			var linesInObjectJoined = linesInObject.join("\n");
+
+			objectRead = new PdfFileObject
+			(
+				objectId,
+				"todo", // todo
+				linesInObjectJoined // content
+			);
+		}
+
+		return objectRead;
+	}
+}
+
+class UiEventHandler
+{
+	static inputFile_Changed(inputFile)
+	{
+		var file = inputFile.files[0];
+		if (file != null)
+		{
+			var fileReader = new FileReader();
+			fileReader.onload = (event) =>
+			{
+				var pdfFileAsBinaryString = event.target.result;
+				var pdfFile = PdfFile.fromBinaryString(pdfFileAsBinaryString);
+				var pdfFileAsJson = pdfFile.toJson();
+
+				var d = document;
+				var textareaPdfFileAsJson =
+					d.getElementById("textareaPdfFileAsJson");
+				textareaPdfFileAsJson.value = pdfFileAsJson;
+			}
+			fileReader.readAsBinaryString(file);
+		}
+	}
+}
+
+</script>
+
+</body>
+
+</html>
