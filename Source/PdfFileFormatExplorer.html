@@ -57,11 +57,11 @@ class PdfFile
 	// For info on the PDF file specification, visit the following URL:
 	// https://resources.infosecinstitute.com/topic/pdf-file-format-basic-structure/
 
-	constructor(version, objects, crossReferences)
+	constructor(version, crossReferences, objects)
 	{
 		this.version = version;
-		this.objects = objects;
 		this.crossReferences = crossReferences;
+		this.objects = objects;
 	}
 
 	static fromBinaryString(fileAsBinaryString)
@@ -132,9 +132,9 @@ class PdfFile
 			else if (lineRead == "xref")
 			{
 				var lineEndingWithReferenceCount = reader.readLine();
-				var unknownFieldAndReferenceCountAsStrings =
+				var objectNumberAndReferenceCountAsStrings =
 					lineEndingWithReferenceCount.split(" ");
-				if (unknownFieldAndReferenceCountAsStrings.length != 2)
+				if (objectNumberAndReferenceCountAsStrings.length != 2)
 				{
 					throw new Error
 					(
@@ -143,7 +143,7 @@ class PdfFile
 					);
 				}
 				var referenceCountAsString =
-					unknownFieldAndReferenceCountAsStrings[1];
+					objectNumberAndReferenceCountAsStrings[1];
 				var referenceCount = parseInt(referenceCountAsString);
 				if (isNaN(referenceCount))
 				{
@@ -178,7 +178,7 @@ class PdfFile
 
 		var returnValue = new PdfFile
 		(
-			version, objectsReadSoFar, crossReferencesReadSoFar
+			version, crossReferencesReadSoFar, objectsReadSoFar
 		);
 
 		return returnValue;
@@ -192,14 +192,67 @@ class PdfFile
 
 class PdfFileCrossReference
 {
-	constructor(todo)
+	constructor(offsetInBytes, generationNumber, isInUse)
 	{
-		this.todo = todo;
+		this.offsetInBytes = offsetInBytes;
+		this.generationNumber = generationNumber;
+		this.isInUse = isInUse;
 	}
 
 	static fromString(stringToParse)
 	{
-		return new PdfFileCrossReference(stringToParse);
+		var returnValue;
+
+		var fields = stringToParse.split(" ");
+		if (fields.length != 3)
+		{
+			throw new Error
+			(
+				"Unexpected format: Expected 3 fields, but was: "
+				+ stringToParse
+			);
+		}
+		else
+		{
+			var offsetAsString = fields[0];
+			var generationNumberAsString = fields[1];
+			var isInUseAsString = fields[2].trim();
+
+			if (isNaN(offsetAsString) )
+			{
+				throw new Error
+				(
+					"Unexpected format: Cross-reference offset could not be parsed as integer: "
+					+ offsetAsString
+				);
+			}
+			else if (isNaN(generationNumberAsString) )
+			{
+				throw new Error
+				(
+					"Unexpected format: Cross-reference generation number could not be parsed as integer: "
+					+ generationNumberAsString
+				);
+			}
+			else if (isInUseAsString != "f" && isInUseAsString != "n")
+			{
+				throw new Error
+				(
+					"Unexpected format: Cross-reference is in use code was expected to be 'f' or 'n', but was: "
+					+ isInUseAsString
+				);
+			}
+			else
+			{
+				var offset = parseInt(fields[0]);
+				var generationNumber = parseInt(fields[1]);
+				var isInUse = (isInUseAsString == "n");
+
+				returnValue = new PdfFileCrossReference(offset, generationNumber, isInUse);
+			}
+
+			return returnValue;
+		}
 	}
 }
 
